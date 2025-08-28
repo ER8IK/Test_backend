@@ -8,8 +8,11 @@ const getRoleId = async (roleName) => {
 }
 
 const findAllStudents = async (payload) => {
-    const { name, className, section, roll } = payload;
+    const { name, className, section, roll, page, limit } = payload;
+    const offset = (page - 1) * limit;
+    console.log("Offset:", offset);
     let query = `
+    WITH filteres AS (
         SELECT
             t1.id,
             t1.name,
@@ -21,8 +24,8 @@ const findAllStudents = async (payload) => {
         WHERE t1.role_id = 3`;
     let queryParams = [];
     if (name) {
-        query += ` AND t1.name = $${queryParams.length + 1}`;
-        queryParams.push(name);
+        query += ` AND t1.name ILIKE $${queryParams.length + 1}`;
+        queryParams.push(`%${name}%`);
     }
     if (className) {
         query += ` AND t3.class_name = $${queryParams.length + 1}`;
@@ -37,10 +40,30 @@ const findAllStudents = async (payload) => {
         queryParams.push(roll);
     }
 
-    query += ' ORDER BY t1.id';
+    query += `
+        ),
+        counted AS (
+            SELECT COUNT(*)::int AS total FROM filtered
+        ),
+        paged AS (
+            SELECT *
+            FROM filtered
+            ORDER BY id
+            LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2}
+        )
+        SELECT counted.total,
+            COALESCE(paged_data.data, '[]'::json) AS data
+        FROM counted
+        LEFT JOIN (
+            SELECT json_agg(paged ORDER BY paged.id) AS data
+            FROM paged
+        ) AS paged_data ON TRUE;`
+         queryParams.push(limit, offset);
 
     const { rows } = await processDBRequest({ query, queryParams });
-    return rows;
+    const { data = [], total = 0 } = rows[0] || {};
+    const hasMore = total > page * limit;
+    return { data, total, page, limit, hasMore };
 }
 
 const addOrUpdateStudent = async (payload) => {
@@ -111,14 +134,13 @@ const findStudentToUpdate = async (paylaod) => {
     return rows;
 }
 
-const deleteStudent = async (id) => {
-    const query = `
-        DELETE FROM users
-        WHERE id = $1 AND role_id = 3
-        `;
-        const queryParams = [id];
-        const { rowCount } = await processDBRequest({ query, queryParams });
-        return rowCount;
+const deleteStudentById = async (id) => {
+    const query = `WITH deleted_profiles AS ( DELETE FROM user_profiles WHERE user_id = $1 )
+                   DELETE FROM users WHERE id = $1`;
+
+    const queryParams = [id];
+    const { rowCount } = await processDBRequest({ query, queryParams });
+    return rowCount;
 }
 
 module.exports = {
@@ -128,5 +150,5 @@ module.exports = {
     findStudentDetail,
     findStudentToSetStatus,
     findStudentToUpdate,
-    deleteStudent
+    deleteStudentById
 };
